@@ -17,7 +17,6 @@
 - 🖌️ [Pixiv](https://www.pixiv.net/en/users/117904235)  
 - 🎭 [ArtStation](https://www.artstation.com/oculusfestum)  
 
----
 
 ## 🐜 Ant Idol  
 
