@@ -2,12 +2,13 @@
 
 **Creative studio for art, design, and storytelling.**  
  
-
 ## 🌐 Connect with Us  
 
 - 🌍 [Website](https://www.oculus-festum.com/)  
 - 💬 [Discord](https://discord.gg/nGehuU6emD)  
-- 🐦 [Twitter / X](https://x.com/OculusFestum)  
+- 🐦 [Twitter / X](https://x.com/OculusFestum)
+- 🦋 [BlueSky](https://bsky.app/profile/oculusfestum.bsky.social)
+- 🧵 [Threads](https://www.threads.com/@0culus_festum)
 - 📸 [Instagram](https://www.instagram.com/0culus_festum/)  
 - ▶️ [YouTube](https://www.youtube.com/channel/UCvjmXRNS4xQ2-VTEI1F5q4w/)  
 - 💼 [LinkedIn](https://www.linkedin.com/company/oculus-festum/)  
@@ -17,11 +18,11 @@
 - 🖌️ [Pixiv](https://www.pixiv.net/en/users/117904235)  
 - 🎭 [ArtStation](https://www.artstation.com/oculusfestum)  
 
-
 ## 🐜 Ant Idol  
 
 - 🐦 [Ant Idol Twitter / X](https://x.com/Ant_Idol)  
 - 🔺 [Ant Idol Reddit](https://www.reddit.com/r/AntIdol/)
+
 
 
 ## 🤝 Support the Studio  
