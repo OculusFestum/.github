@@ -1,0 +1,312 @@
+name: 💼 Sync Issues with Project & Native Fields
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  PROJECT_NUMBER: '1'
+  DEFAULT_MAIN_TASK: 'Administration - GitHub Organisation'
+  SUB_TASK_PREFIX: 'GitHub Organisation'
+  IS_ORGANISATION_REPO: 'false'
+
+jobs:
+  sync_issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync native issue fields
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_ID: ${{ github.event.issue.node_id }}
+        run: |
+          set -euo pipefail
+
+          issue_title=$(jq -r '.issue.title // ""' "$GITHUB_EVENT_PATH")
+
+          gh api graphql -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issueFields(first: 50) {
+                  nodes {
+                    ... on IssueFieldSingleSelect {
+                      name
+                      options { name }
+                    }
+                  }
+                }
+                issue(number: $number) {
+                  issueFieldValues(first: 50) {
+                    nodes {
+                      ... on IssueFieldSingleSelectValue {
+                        value
+                        field { ... on IssueFieldSingleSelect { name } }
+                      }
+                      ... on IssueFieldDateValue {
+                        value
+                        field { ... on IssueFieldDate { name } }
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
+            -f owner=${{ github.repository_owner }} \
+            -f repo=${{ github.event.repository.name }} \
+            -F number=${{ github.event.issue.number }} > native_state.json
+
+          current_value() {
+            local field_name="$1"
+            jq -r --arg field "$field_name" '
+              [.data.repository.issue.issueFieldValues.nodes[]?
+              | select(.field.name == $field)
+              | .value][0] // ""
+            ' native_state.json
+          }
+
+          native_option_exists() {
+            local field_name="$1"
+            local option_name="$2"
+            jq -e --arg field "$field_name" --arg option "$option_name" '
+              .data.repository.issueFields.nodes[]
+              | select(.name == $field)
+              | .options[]?
+              | select(.name == $option)
+            ' native_state.json >/dev/null
+          }
+
+          set_native_field() {
+            local field_name="$1"
+            local value="$2"
+            [ -z "$value" ] && return 0
+
+            gh api graphql \
+              -f query='
+                mutation($issueId: ID!, $fieldName: String!, $value: String!) {
+                  updateIssue(input: {
+                    id: $issueId
+                    issueFieldUpdates: [{
+                      fieldName: $fieldName
+                      operation: SET
+                      value: $value
+                    }]
+                  }) {
+                    issue { id }
+                  }
+                }' \
+              -f issueId="$ISSUE_ID" \
+              -f fieldName="$field_name" \
+              -f value="$value" >/dev/null
+          }
+
+          if [ "${{ github.event.action }}" = "opened" ]; then
+            if [ -z "$(current_value "Priority")" ] && native_option_exists "Priority" "Set A Priority!"; then
+              set_native_field "Priority" "Set A Priority!"
+            fi
+
+            if [ -z "$(current_value "Effort")" ]; then
+              effort_default=$(jq -r '
+                [.data.repository.issueFields.nodes[]
+                | select(.name == "Effort")
+                | .options[]?.name
+                | select(test("^(Set .*[Ee]ffort!?|Not Set|Unset|TBD)$"; "i"))][0] // ""
+              ' native_state.json)
+              set_native_field "Effort" "$effort_default"
+            fi
+          fi
+
+          if [[ "$issue_title" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})[[:space:]]\|[[:space:]]Content[[:space:]]\| ]]; then
+            set_native_field "Target date" "${BASH_REMATCH[1]}"
+          fi
+
+      - name: Get organization project data
+        if: github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ secrets.PUSH_TO_PROJECT }}
+        run: |
+          set -euo pipefail
+
+          gh api graphql -f query='
+            query($owner: String!, $number: Int!) {
+              organization(login: $owner) {
+                projectV2(number: $number) {
+                  id
+                  fields(first: 50) {
+                    nodes {
+                      ... on ProjectV2Field {
+                        id
+                        name
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                        options { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            }' \
+            -f owner=${{ github.repository_owner }} \
+            -F number=$PROJECT_NUMBER > project_data.json
+
+          PROJECT_ID=$(jq -r '.data.organization.projectV2.id' project_data.json)
+          STATUS_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Status") | .id' project_data.json)
+          BACKLOG_OPTION_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == "BackLog") | .id' project_data.json)
+          MAIN_TASK_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Main Task ID") | .id' project_data.json)
+          SUB_TASK_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Sub Task ID") | .id' project_data.json)
+          CREATION_DATE_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Creation Date") | .id' project_data.json)
+          MEETING_TOPIC_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Meeting Topic") | .id' project_data.json)
+          NO_MEETING_OPTION_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Meeting Topic") | .options[] | select(.name == "No") | .id' project_data.json)
+
+          {
+            echo "PROJECT_ID=$PROJECT_ID"
+            echo "STATUS_FIELD_ID=$STATUS_FIELD_ID"
+            echo "BACKLOG_OPTION_ID=$BACKLOG_OPTION_ID"
+            echo "MAIN_TASK_FIELD_ID=$MAIN_TASK_FIELD_ID"
+            echo "SUB_TASK_FIELD_ID=$SUB_TASK_FIELD_ID"
+            echo "CREATION_DATE_FIELD_ID=$CREATION_DATE_FIELD_ID"
+            echo "MEETING_TOPIC_FIELD_ID=$MEETING_TOPIC_FIELD_ID"
+            echo "NO_MEETING_OPTION_ID=$NO_MEETING_OPTION_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Add issue to project
+        if: github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ secrets.PUSH_TO_PROJECT }}
+          ISSUE_ID: ${{ github.event.issue.node_id }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          project_item_id=$(gh api graphql -f query='
+            mutation($project: ID!, $issue: ID!) {
+              addProjectV2ItemById(input: {projectId: $project, contentId: $issue}) {
+                item { id }
+              }
+            }' -f project=$PROJECT_ID -f issue=$ISSUE_ID --jq '.data.addProjectV2ItemById.item.id')
+
+          echo "PROJECT_ITEM_ID=$project_item_id" >> "$GITHUB_ENV"
+
+      - name: Initialize project-only fields
+        if: github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ secrets.PUSH_TO_PROJECT }}
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          PROJECT_ITEM_ID: ${{ env.PROJECT_ITEM_ID }}
+          MAIN_TASK_FIELD_ID: ${{ env.MAIN_TASK_FIELD_ID }}
+          SUB_TASK_FIELD_ID: ${{ env.SUB_TASK_FIELD_ID }}
+          BACKLOG_OPTION_ID: ${{ env.BACKLOG_OPTION_ID }}
+          STATUS_FIELD_ID: ${{ env.STATUS_FIELD_ID }}
+          CREATION_DATE_FIELD_ID: ${{ env.CREATION_DATE_FIELD_ID }}
+          MEETING_TOPIC_FIELD_ID: ${{ env.MEETING_TOPIC_FIELD_ID }}
+          NO_MEETING_OPTION_ID: ${{ env.NO_MEETING_OPTION_ID }}
+        run: |
+          set -euo pipefail
+
+          update_text_field() {
+            local field_id="$1"
+            local value="$2"
+            [ -z "$field_id" ] && return 0
+            [ -z "$value" ] && return 0
+            gh api graphql -f query='
+              mutation($projectId: ID!, $projectItemId: ID!, $fieldId: ID!, $value: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $projectItemId,
+                  fieldId: $fieldId,
+                  value: { text: $value }
+                }) { projectV2Item { id } }
+              }' -f projectId=$PROJECT_ID -f projectItemId=$PROJECT_ITEM_ID -f fieldId=$field_id -f value="$value" >/dev/null
+          }
+
+          update_select_field() {
+            local field_id="$1"
+            local option_id="$2"
+            [ -z "$field_id" ] && return 0
+            [ -z "$option_id" ] && return 0
+            gh api graphql -f query='
+              mutation($projectId: ID!, $projectItemId: ID!, $fieldId: ID!, $value: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $projectItemId,
+                  fieldId: $fieldId,
+                  value: { singleSelectOptionId: $value }
+                }) { projectV2Item { id } }
+              }' -f projectId=$PROJECT_ID -f projectItemId=$PROJECT_ITEM_ID -f fieldId=$field_id -f value="$option_id" >/dev/null
+          }
+
+          update_date_field() {
+            local field_id="$1"
+            local value="$2"
+            [ -z "$field_id" ] && return 0
+            [ -z "$value" ] && return 0
+            gh api graphql -f query='
+              mutation($projectId: ID!, $projectItemId: ID!, $fieldId: ID!, $value: Date!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $projectItemId,
+                  fieldId: $fieldId,
+                  value: { date: $value }
+                }) { projectV2Item { id } }
+              }' -f projectId=$PROJECT_ID -f projectItemId=$PROJECT_ITEM_ID -f fieldId=$field_id -f value="$value" >/dev/null
+          }
+
+          LABELS=$(echo '${{ toJson(github.event.issue.labels) }}' | jq -r '.[].name')
+          ISSUE_BODY=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")
+
+          if [ "$IS_ORGANISATION_REPO" = "true" ]; then
+            FORM_DOMAIN=$(printf '%s\n' "$ISSUE_BODY" | awk '
+              found && NF { print; exit }
+              /^### Domain$/ { found=1 }
+            ')
+
+            if [ -n "$FORM_DOMAIN" ] && [ "$FORM_DOMAIN" != "_No response_" ]; then
+              MAIN_TASK_NAME="$FORM_DOMAIN"
+              gh issue edit "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --add-label "$MAIN_TASK_NAME" \
+                || echo "Could not add domain label automatically."
+            elif echo "$LABELS" | grep -Fxq "Administration"; then MAIN_TASK_NAME="Administration"
+            elif echo "$LABELS" | grep -Fxq "Art & Design"; then MAIN_TASK_NAME="Art & Design"
+            elif echo "$LABELS" | grep -Fxq "Community & Support"; then MAIN_TASK_NAME="Community & Support"
+            elif echo "$LABELS" | grep -Fxq "Development"; then MAIN_TASK_NAME="Development"
+            elif echo "$LABELS" | grep -Fxq "Finance"; then MAIN_TASK_NAME="Finance"
+            elif echo "$LABELS" | grep -Fxq "Human Resources (HR)"; then MAIN_TASK_NAME="Human Resources (HR)"
+            elif echo "$LABELS" | grep -Fxq "Infrastructure Management"; then MAIN_TASK_NAME="Infrastructure Management"
+            elif echo "$LABELS" | grep -Fxq "Legal"; then MAIN_TASK_NAME="Legal"
+            elif echo "$LABELS" | grep -Fxq "Marketing"; then MAIN_TASK_NAME="Marketing"
+            elif echo "$LABELS" | grep -Fxq "Operations"; then MAIN_TASK_NAME="Operations"
+            elif echo "$LABELS" | grep -Fxq "Research & Development"; then MAIN_TASK_NAME="Research & Development"
+            elif echo "$LABELS" | grep -Fxq "Sales"; then MAIN_TASK_NAME="Sales"
+            elif echo "$LABELS" | grep -Fxq "Story & Content"; then MAIN_TASK_NAME="Story & Content"
+            else MAIN_TASK_NAME="Uncategorized - Org"
+            fi
+          else
+            MAIN_TASK_NAME="$DEFAULT_MAIN_TASK"
+          fi
+
+          update_text_field "$MAIN_TASK_FIELD_ID" "$MAIN_TASK_NAME"
+
+          if [ "$IS_ORGANISATION_REPO" != "true" ] && [ -n "$SUB_TASK_FIELD_ID" ]; then
+            if echo "$LABELS" | grep -Fxq "bug"; then
+              SUB_TASK_NAME="$SUB_TASK_PREFIX | Bug"
+            elif echo "$LABELS" | grep -Fxq "enhancement"; then
+              SUB_TASK_NAME="$SUB_TASK_PREFIX | Enhancement"
+            elif echo "$LABELS" | grep -Fxq "refactor"; then
+              SUB_TASK_NAME="$SUB_TASK_PREFIX | Refactor"
+            elif echo "$LABELS" | grep -Fxq "automated testing"; then
+              SUB_TASK_NAME="$SUB_TASK_PREFIX | Testing"
+            else
+              SUB_TASK_NAME="$SUB_TASK_PREFIX | General"
+            fi
+            update_text_field "$SUB_TASK_FIELD_ID" "$SUB_TASK_NAME"
+          fi
+
+          update_select_field "$STATUS_FIELD_ID" "$BACKLOG_OPTION_ID"
+          update_date_field "$CREATION_DATE_FIELD_ID" "$(date -u +'%Y-%m-%d')"
+          update_select_field "$MEETING_TOPIC_FIELD_ID" "$NO_MEETING_OPTION_ID"
