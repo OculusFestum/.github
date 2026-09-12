@@ -158,7 +158,7 @@ jobs:
 
           PROJECT_ID=$(jq -r '.data.organization.projectV2.id' project_data.json)
           STATUS_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Status") | .id' project_data.json)
-          BACKLOG_OPTION_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == "BackLog") | .id' project_data.json)
+          BACKLOG_OPTION_ID=$(jq -r '[.data.organization.projectV2.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == "Backlog" or .name == "BackLog") | .id][0] // ""' project_data.json)
           MAIN_TASK_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Main Task ID") | .id' project_data.json)
           SUB_TASK_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Sub Task ID") | .id' project_data.json)
           CREATION_DATE_FIELD_ID=$(jq -r '.data.organization.projectV2.fields.nodes[] | select(.name == "Creation Date") | .id' project_data.json)
